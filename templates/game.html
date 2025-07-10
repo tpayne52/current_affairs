@@ -46,6 +46,9 @@
                     <div id="form-submit"><h1>Waiting for all bids...</h1></div>
                     <div id="errMsg">
                     </div>
+                    <div id="graph-controls">
+                        <button id="nextGraphBtn">Change Graph</button>
+                    </div>
                 </div>
             </div>
         {% endif %}
@@ -58,9 +61,10 @@
             </ol>
         </div>
         <div class="gains-container">
-            <h1>Player Gains</h1>
+            <h1>Player Round Gains</h1>
             <ol id="playerGains"></ol>
         </div>
+        <img id="myImage" alt="Dynamic">
     </div>
     <div class="bidGraph"></div>
     <button id="leave-btn">Leave</button>

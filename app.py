@@ -1,5 +1,5 @@
 from flask import Flask, request, session, render_template, redirect, url_for
-from flask_socketio import SocketIO, Namespace, join_room, leave_room, disconnect
+from flask_socketio import SocketIO, Namespace, join_room, leave_room, disconnect, emit
 from functools import wraps
 from dotenv import load_dotenv
 from urllib.parse import parse_qs
@@ -22,24 +22,31 @@ def linprog_to_graph(in_data, in_linprog, demand, marketPrice):
     colors = []
     players = []
     costs = []
+    assets = []
+    rand_color = get_random_rgba()
     for index, p in enumerate(in_data):
         if in_linprog[index] > 0 and in_linprog[index] < p["quantity"]:
             # Line intersects bar
+            assets.append(p["asset"])
             barHeight.append(p["price"])
             xList.append(in_linprog[index] / 2 + cur_width)
             widthBar.append(in_linprog[index])
+            # colors.append(f'rgba({rand_color[0]}, {rand_color[1]}, {rand_color[2]}, 1)')
             colors.append(f'rgba({p["color"][0]}, {p["color"][1]}, {p["color"][2]}, 1)')
             players.append(p["player"])
             costs.append(p["generation"])
             cur_width += in_linprog[index]
+            assets.append(p["asset"])
             barHeight.append(p["price"])
             xList.append(((p["quantity"] - in_linprog[index]) / 2 + cur_width))
             widthBar.append(p["quantity"] - in_linprog[index])
+            # colors.append(f'rgba({rand_color[0]}, {rand_color[1]}, {rand_color[2]}, 0.25)')
             colors.append(f'rgba({p["color"][0]}, {p["color"][1]}, {p["color"][2]}, 0.25)')
             players.append(p["player"])
             costs.append(p["generation"])
             cur_width += p["quantity"] - in_linprog[index]
         else:
+            assets.append(p["asset"])
             barHeight.append(p["price"])
             xList.append(p["quantity"] / 2 + cur_width)
             widthBar.append(p["quantity"])
@@ -47,8 +54,10 @@ def linprog_to_graph(in_data, in_linprog, demand, marketPrice):
             costs.append(p["generation"])
             cur_width += p["quantity"]
             if in_linprog[index] == 0:
+                # colors.append(f'rgba({rand_color[0]}, {rand_color[1]}, {rand_color[2]}, 0.25)')
                 colors.append(f'rgba({p["color"][0]}, {p["color"][1]}, {p["color"][2]}, 0.25)')
             else:
+                # colors.append(f'rgba({rand_color[0]}, {rand_color[1]}, {rand_color[2]}, 1)')
                 colors.append(f'rgba({p["color"][0]}, {p["color"][1]}, {p["color"][2]}, 1)')
     return  {
                 "barHeight": barHeight,
@@ -58,7 +67,8 @@ def linprog_to_graph(in_data, in_linprog, demand, marketPrice):
                 "demand": demand,
                 "marketPrice": marketPrice,
                 "players": players,
-                "costs": costs
+                "costs": costs,
+                "assets": assets
             }
 
 def login_required(f):
@@ -305,12 +315,22 @@ class GameNamespace(Namespace):
         if allBid:
             marketUnits = game_room.get_total_bid_units()
 
+        # Get list of asset names and the bid prices
+        all_bids = game_room.get_json_all_bids()
+        asset_names = []
+        bid_prices = []
+        for bid in all_bids:
+            asset_names.append(bid["asset"])
+            bid_prices.append(bid["price"])
+
         print(f"Submit Bid id: {game_room.get_player_data_object(name).get_id()}")
         data = {
             "allBid": allBid,
             "name": name,
             "player_id": game_room.get_player_data_object(name).get_id(),
-            "marketUnits": marketUnits
+            "marketUnits": marketUnits,
+            "assetNames": asset_names,
+            "bidPrices": bid_prices
         }
         print(f"Send data to room: {data}")
         socketio.emit('all_bids_status', data, namespace='/game', to=room)
@@ -334,17 +354,27 @@ class GameNamespace(Namespace):
         parsed_data = parse_qs(data.get('data', ''))
         parsed_data_clean = {}
 
+        multi_value_keys = {"assets", "bids"}
+
         for key, values in parsed_data.items():
-            try:
-                # Try converting the value to an int
-                parsed_data_clean[key] = int(values[0])
-            except ValueError:
+            if key in multi_value_keys:
+                if key == "bids":
+                    # Convert to list of ints
+                    parsed_data_clean[key] = [float(v) for v in values]
+                else:
+                    parsed_data_clean[key] = values  # always a list
+            else:
+                # single value, try conversions
+                val = values[0]
                 try:
-                    # If that fails, try converting the value to a float
-                    parsed_data_clean[key] = float(values[0])
+                    parsed_data_clean[key] = int(val)
                 except ValueError:
-                    # If both conversions fail, keep it as original type
-                    parsed_data_clean[key] = values[0]
+                    try:
+                        parsed_data_clean[key] = float(val)
+                    except ValueError:
+                        parsed_data_clean[key] = val
+
+        event = parsed_data_clean["event"]
 
         all_bids = game_room.get_json_all_bids()
         sorted_bids = sorted(all_bids, key=lambda x: (x["price"], x["asset"]))
@@ -378,7 +408,156 @@ class GameNamespace(Namespace):
             x = u
 
         graphData = linprog_to_graph(sorted_bids, x, demand, market_price)
+        # TODO REDEFINE so that the bids are taken out at the lowest level (directly from the stuff passed back from the front end) Then put back more print statments
+        player_profits = []
+        player_gains = []
+        for index, bid in enumerate(sorted_bids):
+            gain = (market_price - bid["generation"]) * x[index]
+            player_profit = (market_price - bid["generation"]) * x[index]
+            player_gains.append({"player": bid["player"], "gain": gain})
+            player_profits.append({"player": bid["player"], "id": bid["id"], "total": bid["data"].get_profit() + player_profit})
 
+        sorted_player_profits = sorted(player_profits, key=lambda x: x["total"], reverse=True)
+        sorted_player_gains_before_event = sorted(player_gains, key=lambda x: x["gain"], reverse=True)
+
+        # sorted_player_gains_post_event
+        data_before_event =  {
+                    "graphData": graphData,
+                    "playerProfits": sorted_player_profits,
+                    "playerGainsBeforeEvent": sorted_player_gains_before_event,
+                    "roundNumber": game_room.get_current_round() + 1
+                }
+        
+        print(f"the marketUnits: {parsed_data_clean['marketUnits']}")
+
+        # get list of assets and bids selected
+        selected_assets = parsed_data_clean.get('assets', [])
+        selected_bids = parsed_data_clean.get('bids', [])
+        print(f"selected bids: {selected_bids}")
+
+        data_after_event = self.rand_event(sorted_bids, demand, event, parsed_data_clean["marketUnits"], market_price, min(prices), selected_assets, selected_bids)
+        
+        data = data_before_event | data_after_event
+
+        
+        socketio.emit('round_over', data, namespace='/game', to=room)
+  
+
+        game_room.set_all_players_bid_status(False)
+        game_room.increment_round()
+
+    def rand_event(self, sorted_bids, demand, event, marketUnits, market_price_old, min_price, selected_assets, selected_bids):
+        #THIS IS WHERE THE EVENT HAPPENS
+        if event == "none":
+            event_name = "None"
+            # data =  {
+            #     "graphDataAfterEvent": None,
+            #     "playerProfitsAfterEvent": None,
+            #     "playerGainsAfterEvent": None,
+            # } 
+            print("No extra Events")
+            # return data
+        
+        elif event == "high_dem":
+            event_name = "Higher Demand"
+            try:
+                demand = random.randint(demand, int(min(demand+marketUnits*1/3, marketUnits*9/10)))
+            except:
+                demand = marketUnits
+
+        elif event == "low_dem":
+            event_name = "Lower Demand"
+            try:
+                demand = random.randint(int(max(demand-marketUnits*1/3, marketUnits*1/10)), demand)
+            except:
+                demand = 0
+
+        elif event == "high_bidder_remove":
+            event_name = "Remove Highest Cleared Bidder"
+            for bid in sorted_bids:
+                if bid['price'] == market_price_old:
+                    bid['price'] = 0
+                    bid['quantity'] = 0
+                    break
+
+        elif event == "low_bidder_remove":
+            event_name = "Remove Lowest Cleared Bidder"
+            # remove the quantity of the minimum price
+            for bid in sorted_bids:
+                if bid['price'] == min_price:
+                    bid['price'] = 0
+                    bid['quantity'] = 0
+                    break
+
+        elif event == "tax_coal&nat_gas":
+            event_name = "Tax on Coal and Natural Gas"
+            coal_natGas = ["Coal", "Natural Gas (Open Cycle)", "Coal-to-Liquid",
+                       "Natural Gas (Combined Cycle)","Shale Oil Power Generation"]
+            for bid in sorted_bids:
+                if bid["asset"] in coal_natGas:
+                    bid["generation"] = bid["generation"]+20 # add $20 tax
+
+        elif event == "remove_renewable":
+            event_name = "Remove Renewable Generators"
+            renewables = [
+                "Wind (onshore)", "Wind (Offshore)", "Solar Photovoltaic", "Concentrated Solar Power",
+                "Large-Scale Hydropower", "Geothermal", "Biomass (Wood)", "Biomass (Agricultural Waste)",
+                "Biogas (Landfills)", "Tidal Power", "Wave Power", "Concentrated Solar Thermal", "Algae Biofuel",
+                "Organic Photovoltaic", "Microgrids (Renewable)", "Ocean Thermal Energy Conversion"
+            ]
+            for bid in sorted_bids:
+                if bid["asset"] in renewables:
+                    bid['price'] = 0
+                    bid['quantity'] = 0
+
+        elif event == "remove_by_asset_name":
+            event_name = "Removed Some Bidders by Asset Name"
+            for bid in sorted_bids:
+                if bid["asset"] in selected_assets:
+                    bid['price'] = 0
+                    bid['quantity'] = 0
+
+        elif event == "remove_by_bid_price":
+            event_name = "Removed Some Bidders by Bid Price"
+            for bid in sorted_bids:
+                if bid["price"] in selected_bids:
+                    selected_bids.remove(bid["price"])
+                    bid['price'] = 0
+                    bid['quantity'] = 0
+
+        else:
+            print("Event Not Recognized")
+        
+
+        prices = []
+        quantities = []
+        for bid in sorted_bids:
+            prices.append(bid["price"])
+            quantities.append(bid["quantity"])
+
+        c = prices #prices
+        u = quantities #quantities of each good
+        b_eq = [demand, 0]
+
+        #l = [0]*len(c)
+        A_eq = [[1]*len(c), [0]*len(c)]
+        bounds = []
+        for upper_bound in u:
+            bounds.append((0, upper_bound))
+
+        #define the quantities cleared and market price  USING MAGIC
+        if sum(u) >= demand:
+            res = linprog(c, A_eq=A_eq, b_eq=b_eq, bounds=bounds)
+            print(f"The marginal returned from LinProg: {res.eqlin['marginals']}")
+            print(f"The vector x returned from LinProg{res.x}\n\n")
+            market_price = res.eqlin["marginals"][0]
+            x = res.x
+        else:
+            market_price = max(c)
+            x = u
+
+        graphData = linprog_to_graph(sorted_bids, x, demand, market_price)
+        # TODO REDEFINE so that the bids are taken out at the lowest level (directly from the stuff passed back from the front end) Then put back more print statments
         player_profits = []
         player_gains = []
         for index, bid in enumerate(sorted_bids):
@@ -387,18 +566,24 @@ class GameNamespace(Namespace):
             player_gains.append({"player": bid["player"], "gain": gain})
             player_profits.append({"player": bid["player"], "id": bid["id"], "total": bid["data"].get_profit()})
         sorted_player_profits = sorted(player_profits, key=lambda x: x["total"], reverse=True)
-        sorted_player_gains = sorted(player_gains, key=lambda x: x["gain"], reverse=True)
-        data =  {
-                    "graphData": graphData,
-                    "playerProfits": sorted_player_profits,
-                    "playerGains": sorted_player_gains,
-                    "roundNumber": game_room.get_current_round() + 1
-                }
-        
-        socketio.emit('round_over', data, namespace='/game', to=room)
+        sorted_player_gains_after_event = sorted(player_gains, key=lambda x: x["gain"], reverse=True)
 
-        game_room.set_all_players_bid_status(False)
-        game_room.increment_round()
+        data =  {
+                    "event": {"event_name": event_name,"event_tag": event},
+                    "graphDataAE": graphData,
+                    "playerProfitsAE": sorted_player_profits,
+                    "playerGainsAE": sorted_player_gains_after_event,
+                } 
+          
+        return data 
+    
+    @socketio.on('change_phase', namespace='/game')
+    def handle_change_phase(data):
+        phase = data.get('phase')
+        if phase is not None:
+            print(f"[SERVER] Received change_phase to: {phase}")
+            # Broadcast to all clients in the namespace
+            emit('update_phase', {'phase': phase}, namespace='/game', broadcast=True)
 
 socketio.on_namespace(LobbyNamespace('/lobby'))
 socketio.on_namespace(GameNamespace('/game'))

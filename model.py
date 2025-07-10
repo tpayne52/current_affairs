@@ -67,6 +67,7 @@ class Bid:
             "quantity": self.quantity 
         }
         return x
+    
 
 class Data:
     def __init__(self, username, id, bid_size, profit):
@@ -74,7 +75,7 @@ class Data:
         self.id = id
         self.bids = [Bid() for _ in range(bid_size)]
         self.profit = profit
-        self.color = get_random_rgba()
+        self.color =  get_random_rgba() # (0, 255, 0)
         self.hasBid = False
 
     def get_player_bids(self):

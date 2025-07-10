@@ -4,6 +4,11 @@ $(document).ready(function() {
 
     const socket = io("/game");
 
+     let currentPhase = 0;
+     let data_for_graph;
+     let profits_gains = {};
+     let sharedXRange = null;
+
     // Get Initial Game Info
     socket.emit('get_stats');
 
@@ -38,10 +43,28 @@ $(document).ready(function() {
         $('#bid-form')[0].reset();
     });
 
+    $('#nextGraphBtn').on('click', () => {
+        console.log("Next Button Clicked");
+        currentPhase = (currentPhase + 1) % 2;
+        socket.emit('change_phase', { phase: currentPhase });
+    });
+
     socket.on('round_over', (data) => {
         $('#errMsg').empty();
         const profits = data["playerProfits"].map(p => `<li id="${p["id"]}" class="bid-unready">${p["player"]}: $${p["total"].toLocaleString()}</li>`).join("");
-        const gains = data["playerGains"].map(g => {
+        const profits_AE = data["playerProfitsAE"].map(p => `<li id="${p["id"]}" class="bid-unready">${p["player"]}: $${p["total"].toLocaleString()}</li>`).join("");
+
+        const gains = data["playerGainsBeforeEvent"].map(g => {
+            let color = ""
+            if (g["gain"] > 0) {
+                color = "positive"
+            } else if (g["gain"] < 0) {
+                color = "negative"
+            }
+            return `<li>${g["player"]}: <span class=${color}>$${g["gain"].toLocaleString()}</span></li>`
+        }).join("");
+
+        const gains_AE = data["playerGainsAE"].map(g => {
             let color = ""
             if (g["gain"] > 0) {
                 color = "positive"
@@ -55,7 +78,23 @@ $(document).ready(function() {
         $('#playerGains').html(gains);
         $('#round').html(data["roundNumber"]);
         $('#form-submit').html("<h1>Waiting for all bids...</h1>");
-        updateGraph(data); 
+
+        currentPhase = 0;
+        data_for_graph = data;
+        profits_gains["profits"] = profits;
+        profits_gains["profits_AE"] = profits_AE;
+        profits_gains["gains"] = gains;
+        profits_gains["gains_AE"] = gains_AE;
+
+        updateGraph(data, currentPhase); 
+        
+        
+    });
+
+    socket.on('update_phase', (data) => {
+        currentPhase = data.phase;
+        updateLeader(profits_gains, currentPhase);
+        updateGraph(data_for_graph, currentPhase); // Update the local graph
     });
 
     socket.on('bid_status', (data) => {
@@ -69,17 +108,105 @@ $(document).ready(function() {
             player.removeClass("bid-unready").addClass("bid-ready");
         }
 
-        if (data["allBid"]) { 
-            const form = `
-                <form method="POST" id="round-form">
-                    <label for="slider">Slider:</label>
-                    <input type="range" id="slider" name="slider" min="0" max="${data["marketUnits"]}" value="${Math.trunc(data["marketUnits"] / 2)}">
-                    <label for="demand">Demand:</label>
-                    <input type="number" id="demand" name="demand" min="0" max="${data["marketUnits"]}" value="${Math.trunc(data["marketUnits"] / 2)}">
-                    <input type="submit" id="submit" name="round-submit" value="Run Round">
-                </form>
+        if (data["allBid"]) {
+        const form = `
+            <form method="POST" id="round-form">
+                <label for="slider">Slider:</label>
+                <input type="range" id="slider" name="slider" min="0" max="${data["marketUnits"]}" value="${Math.trunc(data["marketUnits"] / 2)}">
+                <label for="demand">Demand:</label>
+                <input type="number" id="demand" name="demand" min="0" max="${data["marketUnits"]}" value="${Math.trunc(data["marketUnits"] / 2)}">
+
+                <p>Select an event:</p>
+                <label><input type="radio" name="event" value="high_dem"> Higher Demand</label><br>
+                <label><input type="radio" name="event" value="low_dem" checked> Lower Demand</label><br>
+                <label><input type="radio" name="event" value="high_bidder_remove"> Remove Highest Cleared Bidder</label><br>
+                <label><input type="radio" name="event" value="low_bidder_remove"> Remove Lowest Cleared Bidder</label><br>
+                <label><input type="radio" name="event" value="tax_coal&nat_gas"> Tax on Coal and Natural Gas</label><br>
+                <label><input type="radio" name="event" value="remove_renewable"> Remove Renewable Generators</label><br>
+                <label><input type="radio" name="event" value="remove_by_asset_name"> Remove Generators by Asset Name</label><br>
+                <label><input type="radio" name="event" value="remove_by_bid_price"> Remove Generators by Bid Price</label><br>
+                <label><input type="radio" name="event" value="none"> None </label><br>
+
+                <div id="assetDropdownContainer" style="display:none; margin-top:10px;"></div>
+
+                <input type="hidden" name="marketUnits" value="${data["marketUnits"]}">
+
+                <input type="submit" id="submit" name="round-submit" value="Run Round">
+            </form>
             `;
             $('#form-submit').html(form);
+
+            // === ADD DROPDOWN LOGIC HERE ===
+
+            // Your assetList array - replace with your actual data if available:
+            const assetList = data['assetNames'];
+            const bidList = data['bidPrices'];
+
+            // Cache the container
+            const $dropdownContainer = $('#assetDropdownContainer');
+
+            // Attach event listener to radio buttons within the newly inserted form
+            $('#round-form').on('change', 'input[name="event"]', function () {
+                const selectedValue = $(this).val();
+
+                if (selectedValue === 'remove_by_asset_name') {
+                    $dropdownContainer.empty().show();
+
+                    const $label = $('<p>').text('Select assets:');
+                    $dropdownContainer.append($label);
+
+                    $.each(assetList, function (i, asset) {
+                        const $checkbox = $('<input>')
+                            .attr({
+                                type: 'checkbox',
+                                name: 'assets',
+                                value: asset,
+                                id: `asset-${i}`
+                            });
+
+                        const $checkboxLabel = $('<label>')
+                            .attr('for', `asset-${i}`)
+                            .text(asset);
+
+                        $dropdownContainer
+                            .append($checkbox)
+                            .append($checkboxLabel)
+                            .append('<br>');
+                    });
+
+                    $dropdownContainer.append($label).append('<br>').append($select);
+                }
+                else if (selectedValue === 'remove_by_bid_price') {
+                    $dropdownContainer.empty().show();
+
+                    const $label = $('<p>').text('Select prices:');
+                    $dropdownContainer.append($label);
+
+                    $.each(bidList, function (i, bid) {
+                        const $checkbox = $('<input>')
+                            .attr({
+                                type: 'checkbox',
+                                name: 'bids',
+                                value: bid,
+                                id: `bid-${i}`
+                            });
+
+                        const $checkboxLabel = $('<label>')
+                            .attr('for', `bid-${i}`)
+                            .text(bid);
+
+                        $dropdownContainer
+                            .append($checkbox)
+                            .append($checkboxLabel)
+                            .append('<br>');
+                    });
+
+                    $dropdownContainer.append($label).append('<br>').append($select);
+                }
+                else {
+                    $dropdownContainer.hide().empty();
+                }
+            });
         }
     });
 
@@ -110,73 +237,76 @@ $(document).ready(function() {
         $("#slider").val($(this).val()); // Keep slider in sync
     });
 
-    function updateGraph(data) {
-        const in_data = data["graphData"]
-        const graph = document.querySelector('.bidGraph');
-        const demand = in_data["demand"]
-        const marketPrice = in_data["marketPrice"]
-        const xList = in_data["xList"] // Center of Bar (to[0] - from[0] / 2)
-        const widthBar = in_data["widthBar"] // Width from left to right
-        const barHeight = in_data["barHeight"] // Height of bar
-        const colors = in_data["colors"]
-        const players = in_data["players"]
-        const costs = in_data["costs"] // Total cost for each player
-        const roundNumber = data["roundNumber"]
-    
-        var data = [
-            {
-                type: 'bar',
-                x: xList,
-                y: barHeight,
-                width: widthBar,
-                name: "Profits",
-                marker: {
-                    color: colors
-                },
-                hovertext: widthBar.map((w, i) => `<b>${players[i]}</b><br>Quantity: ${w}<br>Price: ${barHeight[i]}`), 
-                hoverinfo: "text"
-            },
-            {
-                type: 'bar',
-                x: xList,
-                y: costs,
-                width: widthBar,
-                name: "Cost",
-                marker: { color: 'red' },
-                opacity: 0.6,
-                text: costs,
-                textposition: 'outside',
-                textfont: {
-                    color: 'black',
-                    size: 14
-                },
-                hovertext: costs.map((w, i) => `<b>${players[i]}</b><br>Cost: ${w}`), 
-                hoverinfo: "text"
+    function updateLeader(profits_gains, phase){
+        if(phase ==0){
+            $('#playerProfits').html(profits_gains["profits"]);
+            $('#playerGains').html(profits_gains["gains"]);
+        }
+        else if(phase ==1){
+            $('#playerProfits').html(profits_gains["profits_AE"]);
+            $('#playerGains').html(profits_gains["gains_AE"]);
+        }
+        else{
+            console.log("improper phase");
+        }
+    }
+
+    function updateGraph(data, phase) {
+
+        let config = {
+            displayModeBar: false, // This removes the toolbar
+            displaylogo: false, // This removes the Plotly logo
+            scrollZoom: false, // Disable zoom on scroll
+            staticPlot: false, // Allow hover interactions without panning or zooming
+            editable: false  // Disable editing
+        };
+        
+        ////////////////////////
+        ///GRAPH BEFORE EVENT///
+        ////////////////////////
+        if(phase ==0) {
+
+            // No image
+            $('#myImage').css('visibility', 'hidden');
+                               
+            console.log("Phase 0, show graph");
+
+            const in_data = data["graphData"]
+            const graph = document.querySelector('.bidGraph');
+            const demand = in_data["demand"]
+            const marketPrice = in_data["marketPrice"]
+            const xList = in_data["xList"] // Center of Bar (to[0] - from[0] / 2)
+            const widthBar = in_data["widthBar"] // Width from left to right
+            const barHeight = in_data["barHeight"] // Height of bar
+            const colors = in_data["colors"]
+            const players = in_data["players"]
+            const costs = in_data["costs"] // Total cost for each player
+            const assets = in_data["assets"]
+            const roundNumber = data["roundNumber"]
+
+            if (!sharedXRange) {
+                const totalWidth = widthBar.reduce((acc, w) => acc + w, 0);
+                const maxX = Math.max(totalWidth, demand);
+                const roundedMaxX = Math.ceil(maxX / 10) * 10;
+                sharedXRange = [0, roundedMaxX+200];
             }
-        ];
-    
-        var layout = {
-            barmode: 'overlay',
-            title: {
-                text: `Electricity Market Round ${roundNumber - 1}`
-            },
-            xaxis: {
-                title: {
-                    text: 'Quantity (MW)'  // 🡐 Your custom x-axis label
-                }
-            },
-            yaxis: {
-                title: {
-                    text: 'Price ($/MWh)'  // 🡐 Your custom y-axis label
+
+            let data_before = [
+                {
+                    type: 'bar',
+                    x: xList,
+                    y: barHeight,
+                    width: widthBar,
+                    name: "Bids Before the Event",
+                    marker: {
+                        color: colors
+                    },
+                    hovertext: widthBar.map((w, i) => `<b>${players[i]}</b><br>Asset: ${assets[i]}<br>Quantity: ${w}<br>Price: ${barHeight[i]}`), 
+                    hoverinfo: "text"
                 },
-                type: 'log',
-                range: [Math.log10(1), Math.log10(100000)],
-                tickmode: 'array',
-                tickvals: [1, 10, 100, 1000, 10000], // The values at which to show ticks
-                ticktext: ['1', '10', '100', '1000', '10000'], // Custom labels for the ticks
-            },
-            dragmode: false,
-            shapes: [
+            ];
+
+            let shapes_list_before = [
                 // Horizontal line (Market Price)
                 {
                     type: "line",
@@ -203,50 +333,263 @@ $(document).ready(function() {
                         dash: "dash"
                     }
                 }
-            ],
-            annotations: [
-                {
-                    x: Math.max(widthBar.reduce((acc, cur) => acc + cur, 0), demand),  
-                    y: Math.log10(marketPrice),
-                    xanchor: "left",
-                    yanchor: "middle",
-                    text: `Market Price: ${marketPrice}`,
-                    showarrow: true,
-                    arrowcolor: "red",
-                    ax: 20,  // Move the arrowhead to the right
-                    ay: 0,  // Keep the arrow aligned horizontally
-                    font: {
-                        color: "red",
-                        size: 14
-                    } // This is important
-                },
-                // Demand Label
-                {
-                    x: demand,
-                    y: Math.log10(10000),  
-                    xanchor: "right",
-                    yanchor: "bottom",
-                    text: `Demand: ${demand}`,
-                    showarrow: true,
-                    arrowcolor: "black",
-                    ax: -20,  // Move the arrowhead to the right
-                    ay: -10,  // Keep the arrow aligned horizontally
-                    font: {
-                        color: "black",
-                        size: 14
-                    }
-                }
             ]
-        };
-    
-        var config = {
-            displayModeBar: false, // This removes the toolbar
-            displaylogo: false, // This removes the Plotly logo
-            scrollZoom: false, // Disable zoom on scroll
-            staticPlot: false, // Allow hover interactions without panning or zooming
-            editable: false  // Disable editing
-        };
+
+            let currentX = 0;
+
+            for (let i = 0; i < xList.length; i++) {
+                const width = widthBar[i];
+                const cost = costs[i];
+
+                const barCenter = currentX + width / 2;
+                const halfWidth = width / 2;
+
+                shapes_list_before.push({
+                    type: 'line',
+                    x0: barCenter - halfWidth,
+                    x1: barCenter + halfWidth,
+                    y0: cost,
+                    y1: cost,
+                    line: {
+                        color: 'blue',
+                        width: 2,
+                        dash: 'solid'
+                    }
+                });
+
+                currentX += width;
+            }
+
+            var layout = {
+                barmode: 'overlay',
+                title: {
+                    text: `Electricity Market Round ${roundNumber - 1} (without event)`
+                },
+                xaxis: {
+                    title: {
+                        text: 'Quantity (MW)'  // 🡐 Your custom x-axis label
+                    },
+                    range: sharedXRange
+                },
+                yaxis: {
+                    title: {
+                        text: 'Price ($/MWh)'  // 🡐 Your custom y-axis label
+                    },
+                    type: 'log',
+                    range: [0,5],
+                    tickmode: 'array',
+                    tickvals: [1, 10, 100, 1000, 10000], // The values at which to show ticks
+                    ticktext: ['1', '10', '100', '1000', '10000'], // Custom labels for the ticks
+                },
+                dragmode: false,
+                shapes: shapes_list_before,
+                annotations: [
+                    {
+                        x: Math.max(widthBar.reduce((acc, cur) => acc + cur, 0), demand),  
+                        y: Math.log10(marketPrice),
+                        xanchor: "left",
+                        yanchor: "middle",
+                        text: `Market Price: ${marketPrice}`,
+                        showarrow: true,
+                        arrowcolor: "red",
+                        ax: 20,  // Move the arrowhead to the right
+                        ay: 0,  // Keep the arrow aligned horizontally
+                        font: {
+                            color: "red",
+                            size: 14
+                        } // This is important
+                    },
+                    // Demand Label
+                    {
+                        x: demand,
+                        y: Math.log10(10000),  
+                        xanchor: "right",
+                        yanchor: "bottom",
+                        text: `Demand: ${demand}`,
+                        showarrow: true,
+                        arrowcolor: "black",
+                        ax: -20,  // Move the arrowhead to the right
+                        ay: -10,  // Keep the arrow aligned horizontally
+                        font: {
+                            color: "black",
+                            size: 14
+                        }
+                    }
+                ]
+            };
+
+            Plotly.newPlot(graph, data_before, layout, config);
+        }
+
+        ///////////////////////
+        ///GRAPH AFTER EVENT///
+        ///////////////////////
+        else if(phase == 1){
+
+            // Change Image
+            if(event_tag == "none"){
+                $('#myImage').css('visibility', 'hidden');
+            }
+            else{
+                let imagePath = "/static/images/"+encodeURIComponent(event_tag)+".png";
+                $('#myImage').attr('src', imagePath).css('visibility', 'visible');;
+            }
+
+            console.log("Phase 1, show graph");
+            // After Event (AE)
+            const graph = document.querySelector('.bidGraph');
+            const in_data_AE = data["graphDataAE"]
+            const xList_AE = in_data_AE["xList"] // Center of Bar (to[0] - from[0] / 2)
+            const costs_AE = in_data_AE["costs"] // Total cost for each player
+            const widthBar_AE = in_data_AE["widthBar"] // Width from left to right
+            const barHeight_AE = in_data_AE["barHeight"] // Height of bar
+            const players_AE = in_data_AE["players"]
+            const colors_AE = in_data_AE["colors"]
+            const marketPrice_AE = in_data_AE["marketPrice"]
+            const demand_AE = in_data_AE["demand"]
+            const assets_AE = in_data_AE["assets"]
+            const roundNumber = data["roundNumber"]
+            const event = data["event"]
+            const event_name = event["event_name"]
+            const event_tag = event["event_tag"]
+            
+
+            
+
+            let data_AE = [
+                {
+                    type: 'bar',
+                    x: xList_AE,
+                    y: barHeight_AE,
+                    width: widthBar_AE,
+                    name: "Bids After the Event",
+                    marker: { color: colors_AE },
+                    hovertext: widthBar_AE.map((w, i) => `<b>${players_AE[i]}</b><br>Asset: ${assets_AE[i]}<br>Quantity: ${w}<br>Price: ${barHeight_AE[i]}`),
+                    hoverinfo: "text"
+                },
+            ];
+
+            
+            let shapes_list_AE = [
+                    // Horizontal line (Market Price)
+                    {
+                        type: "line",
+                        x0: 0,  // Start at the min X value
+                        x1: Math.max(widthBar_AE.reduce((acc, cur) => acc + cur, 0), demand_AE),  // End at the max X value
+                        y0: marketPrice_AE,
+                        y1: marketPrice_AE,
+                        line: {
+                            color: "red",
+                            width: 3,
+                            dash: "dash"
+                        }
+                    },
+                    // Vertical line (Demand)
+                    {
+                        type: "line",
+                        x0: demand_AE,
+                        x1: demand_AE,
+                        y0: 0,  // Start at the minimum y value (log(1) = 0)
+                        y1: 100000,  // Extend beyond max y value in log scale
+                        line: {
+                            color: "black",
+                            width: 3,
+                            dash: "dash"
+                        }
+                    }
+                ]
+
+            let currentX = 0;
+
+            for (let i = 0; i < xList_AE.length; i++) {
+                const width = widthBar_AE[i];
+                const cost = costs_AE[i];
+
+                const barCenter = currentX + width / 2;
+                const halfWidth = width / 2;
+
+                shapes_list_AE.push({
+                    type: 'line',
+                    x0: barCenter - halfWidth,
+                    x1: barCenter + halfWidth,
+                    y0: cost,
+                    y1: cost,
+                    line: {
+                        color: 'blue',
+                        width: 2,
+                        dash: 'solid'
+                    }
+                });
+
+                currentX += width;
+            }
+
+            var layout = {
+                barmode: 'overlay',
+                title: {
+                    text: `Electricity Market Round ${roundNumber - 1} (${event_name})`
+                },
+                xaxis: {
+                    title: {
+                        text: 'Quantity (MW)'  // 🡐 Your custom x-axis label
+                    },
+                    range: sharedXRange
+                },
+                yaxis: {
+                    title: {
+                        text: 'Price ($/MWh)'  // 🡐 Your custom y-axis label
+                    },
+                    type: 'log',
+                    range: [0,5],
+                    tickmode: 'array',
+                    tickvals: [1, 10, 100, 1000, 10000], // The values at which to show ticks
+                    ticktext: ['1', '10', '100', '1000', '10000'], // Custom labels for the ticks
+                },
+                dragmode: false,
+                shapes: shapes_list_AE,
+                annotations: [
+                    {
+                        x: Math.max(widthBar_AE.reduce((acc, cur) => acc + cur, 0), demand_AE),  
+                        y: Math.log10(marketPrice_AE),
+                        xanchor: "left",
+                        yanchor: "middle",
+                        text: `Market Price: ${marketPrice_AE}`,
+                        showarrow: true,
+                        arrowcolor: "red",
+                        ax: 20,  // Move the arrowhead to the right
+                        ay: 0,  // Keep the arrow aligned horizontally
+                        font: {
+                            color: "red",
+                            size: 14
+                        } // This is important
+                    },
+                    // Demand Label
+                    {
+                        x: demand_AE,
+                        y: Math.log10(10000),  
+                        xanchor: "right",
+                        yanchor: "bottom",
+                        text: `Demand: ${demand_AE}`,
+                        showarrow: true,
+                        arrowcolor: "black",
+                        ax: -20,  // Move the arrowhead to the right
+                        ay: -10,  // Keep the arrow aligned horizontally
+                        font: {
+                            color: "black",
+                            size: 14
+                        }
+                    }
+                ]
+            };
+
+            Plotly.newPlot(graph, data_AE, layout, config);
+        }
         
-        Plotly.newPlot(graph, data, layout, config);
+
+  
+        else{
+            console.log("IMPROPER PHASE");
+        }
+        
     }
 });
