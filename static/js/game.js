@@ -426,14 +426,7 @@ $(document).ready(function() {
         ///////////////////////
         else if(phase == 1){
 
-            // Change Image
-            if(event_tag == "none"){
-                $('#myImage').css('visibility', 'hidden');
-            }
-            else{
-                let imagePath = "/static/images/"+encodeURIComponent(event_tag)+".png";
-                $('#myImage').attr('src', imagePath).css('visibility', 'visible');;
-            }
+            
 
             console.log("Phase 1, show graph");
             // After Event (AE)
@@ -452,6 +445,15 @@ $(document).ready(function() {
             const event = data["event"]
             const event_name = event["event_name"]
             const event_tag = event["event_tag"]
+
+            // Change Image
+            if(event_tag == "none"){
+                $('#myImage').css('visibility', 'hidden');
+            }
+            else{
+                let imagePath = "/static/images/"+encodeURIComponent(event_tag)+".png";
+                $('#myImage').attr('src', imagePath).css('visibility', 'visible');;
+            }
             
 
             
