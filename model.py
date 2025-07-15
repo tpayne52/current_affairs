@@ -292,6 +292,9 @@ class RoomManager:
 
     def set_game_status(self, input_room_code, input_game_status):
         return (self.rooms[input_room_code]).set_room_status(input_game_status)
+    
+    def get_username_from_players_room(self, input_room_code):
+        return self.rooms[input_room_code].players
 
     def get_sid_from_players_room(self, input_username, input_room_code):#QUESTION wouldnt this also need the room code?
         return self.rooms[input_room_code].get_sid_from_players(input_username)

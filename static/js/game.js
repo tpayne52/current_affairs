@@ -49,6 +49,12 @@ $(document).ready(function() {
         socket.emit('change_phase', { phase: currentPhase });
     });
 
+    $('#startNextRound').on('click', () => {
+        console.log("Start Next Round Button Clicked");
+        socket.emit('start_next_round');
+    });
+
+
     socket.on('round_over', (data) => {
         $('#errMsg').empty();
         const profits = data["playerProfits"].map(p => `<li id="${p["id"]}" class="bid-unready">${p["player"]}: $${p["total"].toLocaleString()}</li>`).join("");
@@ -85,7 +91,8 @@ $(document).ready(function() {
         profits_gains["profits_AE"] = profits_AE;
         profits_gains["gains"] = gains;
         profits_gains["gains_AE"] = gains_AE;
-
+        
+        sharedXRange = null;
         updateGraph(data, currentPhase); 
         
         
@@ -136,7 +143,7 @@ $(document).ready(function() {
             `;
             $('#form-submit').html(form);
 
-            // === ADD DROPDOWN LOGIC HERE ===
+            // === DROPDOWN LOGIC HERE ===
 
             // Your assetList array - replace with your actual data if available:
             const assetList = data['assetNames'];

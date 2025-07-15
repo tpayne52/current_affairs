@@ -127,8 +127,14 @@ def index():
                 return render_template('index.html', ctx=context)
             
             if joining_room is not None:
-                session["room"] = code
-                session["name"] = username
+                player_usernames = [player.username for player in room_manager.get_username_from_players_room(code)]
+                admin_username = room_manager.get_room(code).admin.username
+                if username in player_usernames or username == admin_username: # Ensure usernames are unique
+                    context = { "err": True, "msg": "Enter an Unused Username" }
+                    return render_template('index.html', ctx=context)
+                else:
+                    session["room"] = code
+                    session["name"] = username
 
                 return redirect(url_for('lobby'))
             else: 
@@ -251,6 +257,46 @@ class GameNamespace(Namespace):
         
         socketio.emit('send_stats', data, namespace='/game', to=player_sid)
         print(f"Sent Stats {data} to {name}")
+
+    def on_start_next_round(self):
+        print("Start Next Round event received")
+        room = session.get("room")
+        game_room = room_manager.get_room(room)
+        players = game_room.get_json_room()["players"]
+        for p in players:
+            name = p["username"]
+            if not game_room.get_player_bid_status(name): # havent bid yet
+                    game_room.get_player_data_object(name).set_bid_status(True)
+                    game_room.get_player_data_object(name).get_player_single_bid().set_price_quantity(0.0, 0.0)
+                    socketio.emit('bid_status', {'message': 'Bid successful!'}, namespace='/game', to=game_room.get_sid_from_players(name))
+
+                    marketUnits = 0
+                    allBid = game_room.has_all_players_bid()
+                    if allBid:
+                        marketUnits = game_room.get_total_bid_units()
+
+                    # Get list of asset names and the bid prices
+                    all_bids = game_room.get_json_all_bids()
+                    asset_names = []
+                    bid_prices = []
+                    for bid in all_bids:
+                        asset_names.append(bid["asset"])
+                        bid_prices.append(bid["price"])
+
+                    print(f"Submit Bid id: {game_room.get_player_data_object(name).get_id()}")
+                    data = {
+                        "allBid": allBid,
+                        "name": name,
+                        "player_id": game_room.get_player_data_object(name).get_id(),
+                        "marketUnits": marketUnits,
+                        "assetNames": asset_names,
+                        "bidPrices": bid_prices
+                    }
+                    print(f"Send data to room: {data}")
+                    socketio.emit('all_bids_status', data, namespace='/game', to=room)
+            
+                    print(f"{name} submit data: 0 quantity and price")
+
 
     def on_submit_bid(self, data):
         print("Submit Bid")

@@ -139,6 +139,30 @@ input[type="text"] {
     border-radius: 20px;
     border: none;
 }
+#startNextRound{
+    justify-content: center;
+    box-sizing: border-box;
+    cursor: pointer;
+    padding: 7px;
+    width: 150px;
+    color: rgb(0, 0, 0);
+    background-color: rgb(62, 206, 241);
+    border-radius: 20px;
+    border: 2px solid black;
+}
+
+#nextGraphBtn{
+    justify-content: center;
+    box-sizing: border-box;
+    cursor: pointer;
+    padding: 7px;
+    width: 150px;
+    color: rgb(0, 0, 0);
+    background-color: rgb(202, 178, 41);
+    border-radius: 20px;
+    border: 2px solid black;
+}
+
 #submit {
     justify-content: center;
     box-sizing: border-box;
@@ -152,8 +176,8 @@ input[type="text"] {
 }
 
 #myImage {
-  width: 300px;      
-  height: 200px;
+  width: 600px;      
+  height: 400px;
   object-fit: contain; /* Keeps image from stretching */
   visibility: hidden; /* Keeps space reserved */
 }
